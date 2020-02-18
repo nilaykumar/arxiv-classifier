@@ -29,6 +29,8 @@ std::ostream& operator<<(std::ostream& os, const word& w) {
 int main() {
     // our dictionary of words
     std::vector<word> dict;
+    int ham = 0;
+    int spam = 0;
 
     // read training data from file
     std::ifstream data_stream;
@@ -37,6 +39,10 @@ int main() {
     std::string line;
     if(data_stream.is_open()) {
         std::cout << "Loading previous training data." << std::endl;
+        getline(data_stream, line);
+        ham = std::stoi(line);
+        getline(data_stream, line);
+        spam = std::stoi(line);
         while(getline(data_stream, line)) {
             int i;
             word w;
@@ -159,13 +165,17 @@ int main() {
         std::string input;
         std::getline(std::cin, input);
         bool interesting = (tolower(input.front()) == 'y');
-        if(!interesting)
+        if(!interesting) {
             std::cout << std::endl << "Marked as NOT INTERESTING." << std::endl;
-        else
+            spam ++;
+        } else {
             std::cout << std::endl << "Marked as INTERESTING." << std::endl;
+            ham ++;
+        }
         // loop through each non-null word in the summary
         int pos = 0;
-        std::string s(summary_vector.at(i));
+        // add a space at the end for convenience of how I parse
+        std::string s(summary_vector.at(i) + " ");
         std::string token;
         while((pos = s.find(' ')) != std::string::npos) {
             token = s.substr(0, pos);
@@ -205,6 +215,8 @@ int main() {
     std::cout << "Writing training data to file." << std::endl;
     std::ofstream out_stream;
     out_stream.open("training_data.txt");
+    out_stream << ham << '\n';
+    out_stream << spam << '\n';
     for(word w : dict)
         out_stream << (w.word + "/" + std::to_string(w.ham_freq) + "/" + std::to_string(w.spam_freq) + '\n');
     out_stream.close();
