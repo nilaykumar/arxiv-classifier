@@ -27,6 +27,31 @@ std::ostream& operator<<(std::ostream& os, const word& w) {
 }
 
 int main() {
+    // our dictionary of words
+    std::vector<word> dict;
+
+    // read training data from file
+    std::ifstream data_stream;
+    data_stream.open("training_data.txt");
+    // if it exists, load data into dict
+    std::string line;
+    if(data_stream.is_open()) {
+        std::cout << "Loading previous training data." << std::endl;
+        while(getline(data_stream, line)) {
+            int i;
+            word w;
+            i = line.find('/');
+            w.word = line.substr(0, i);
+            line.erase(0, i + 1);
+            i = line.find('/');
+            w.ham_freq = std::stoi(line.substr(0, i));
+            line.erase(0, i + 1);
+            i = line.find('/');
+            w.spam_freq = std::stoi(line.substr(0, i));
+            dict.push_back(w);
+        }
+    }
+    data_stream.close();
 
     // read subject list from data file
     std::cout << "Reading subject file." << std::endl;
@@ -84,8 +109,6 @@ int main() {
     std::vector<std::string> id_vector;
     std::vector<std::string> published_vector;
 
-    // TODO make sure we aren't double counting papers by using the ID
-
     pugi::xml_node feed = doc.child("feed");
     // obtain the current day from the response
     std::string today(feed.child("updated").child_value());
@@ -126,8 +149,6 @@ int main() {
 
     std::cout << "Found " << summary_vector.size() << " results." << std::endl;
     std::cout << "Initiating user-based training." << std::endl << std::endl;
-    // create dictionary of words
-    std::vector<word> dict;
 
     // training time!
     for(int i = 0; i < summary_vector.size(); i++) {
@@ -177,22 +198,17 @@ int main() {
                 }
             }
         }
-        /*
-        std::cout << std::endl;
-        for(word w : dict)
-            std::cout << w;
-        std::cout << std::endl;
-        */
         std::cout << std::endl << std::endl << std::endl;
     }
 
-    std::cout << std::endl;
+    // write the training data
+    std::cout << "Writing training data to file." << std::endl;
+    std::ofstream out_stream;
+    out_stream.open("training_data.txt");
     for(word w : dict)
-        std::cout << w;
-    std::cout << std::endl;
-
-
-    // append results to data file
+        out_stream << (w.word + "/" + std::to_string(w.ham_freq) + "/" + std::to_string(w.spam_freq) + '\n');
+    out_stream.close();
+    std::cout << "Done." << std::endl;
 
     return 0;
 }
