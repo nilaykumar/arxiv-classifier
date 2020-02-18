@@ -1,3 +1,3 @@
 
 trainer: trainer.cpp
-	g++ -Wall -lcurl -o trainer trainer.cpp -lcurl
+	g++ -o trainer trainer.cpp libpugixml.a -lcurl
