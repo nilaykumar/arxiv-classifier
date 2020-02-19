@@ -1,110 +1,18 @@
 #include<algorithm>
 #include<cctype>
 #include<iostream>
-#include<fstream>
-#include<regex>
 #include<sstream>
-#include<string>
-#include<vector>
 
-#include<curl/curl.h>
 #include "pugixml.hpp"
-
-static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
-    ((std::string*) userp)->append((char*) contents, size * nmemb);
-    return size * nmemb;
-}
-
-struct word {
-    std::string word;
-    int ham_freq;
-    int spam_freq;
-};
-
-std::ostream& operator<<(std::ostream& os, const word& w) {
-    os << "(" << w.word << ", " << w.ham_freq << ", " << w.spam_freq << ")";
-    return os;
-}
+#include "arxiv-classifier.hpp"
 
 int main() {
-    // our dictionary of words
-    std::vector<word> dict;
-    int ham = 0;
-    int spam = 0;
+    load_training_data(TRAINING_FILE);
 
-    // read training data from file
-    std::ifstream data_stream;
-    data_stream.open("training_data.txt");
-    // if it exists, load data into dict
-    std::string line;
-    if(data_stream.is_open()) {
-        std::cout << "Loading previous training data." << std::endl;
-        getline(data_stream, line);
-        ham = std::stoi(line);
-        getline(data_stream, line);
-        spam = std::stoi(line);
-        while(getline(data_stream, line)) {
-            int i;
-            word w;
-            i = line.find('/');
-            w.word = line.substr(0, i);
-            line.erase(0, i + 1);
-            i = line.find('/');
-            w.ham_freq = std::stoi(line.substr(0, i));
-            line.erase(0, i + 1);
-            i = line.find('/');
-            w.spam_freq = std::stoi(line.substr(0, i));
-            dict.push_back(w);
-        }
-    }
-    data_stream.close();
+    std::vector<std::string> subject_vector = load_subject_data(SUBJECTS_FILE); 
 
-    // read subject list from data file
-    std::cout << "Reading subject file." << std::endl;
-    std::ifstream subject_stream("subjects.txt");
-    std::vector<std::string> subject_vector;
-    std::string subject;
-    if(subject_stream.is_open())
-        while(getline(subject_stream, subject))
-            subject_vector.push_back(subject);
-    else {
-        std::cout << "Error opening subject file! Aborting." << std::endl;
-        return 1;
-    }
-    subject_stream.close();
-
-    std::cout << "Found subjects: ";
-    for(std::string s : subject_vector)
-        std::cout << s << ", ";
-    std::cout << std::endl;
-
-    // query arXiv api for today's papers if haven't done so already
-    std::cout << "Querying arXiv API." << std::endl;
-    CURL* curl;
-    CURLcode res;
-    std::string response_buffer;
-    curl = curl_easy_init();
-    if(!curl) {
-        std::cout << "Error loading curl! Aborting." << std::endl;
-        return 1;
-    }
-
-    for(std::string s : subject_vector) {
-        std::string query = "http://export.arxiv.org/api/query?search_query=cat:" + s + "&sortBy=submittedDate&max_results=30";
-        curl_easy_setopt(curl, CURLOPT_URL, query.data());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
-        res = curl_easy_perform(curl);
-        response_buffer += "\n";
-        if(res != CURLE_OK) {
-            std::cout << "curl_easy_perform() failed:" << curl_easy_strerror(res) << std::endl;
-            curl_easy_cleanup(curl);
-            return 1;
-        }
-    }
-    curl_easy_cleanup(curl);
-    std::cout << "Finished querying arXiv API." << std::endl;
-    
+    std::string response_buffer = query_subjects(subject_vector);
+        
     pugi::xml_document doc;
     std::stringstream xml_stream(response_buffer);
     pugi::xml_parse_result result = doc.load(xml_stream);
@@ -120,7 +28,7 @@ int main() {
     std::string today(feed.child("updated").child_value());
     today = today.substr(0, 10);
     // TODO for testing purposes: hardcode one day in
-    today = "2020-02-17";
+    today = "2020-02-18";
     std::cout << "Parsing results from today, " << today << std::endl;
     for(std::string s : subject_vector) {
         for(pugi::xml_node entry = feed.child("entry"); entry; entry = entry.next_sibling("entry")) {
@@ -132,17 +40,10 @@ int main() {
             if(std::find(id_vector.begin(), id_vector.end(), entry.child("id").child_value()) != id_vector.end())
                 continue;
             // keep the unparsed summary for user interaction
-            raw_summary_vector.push_back(entry.child("summary").child_value());
-            // erase everything between $ $
-            std::string latex_removed = std::regex_replace(entry.child("summary").child_value(), std::regex("\\$(.*?)\\$"), "");
-            // replace newlines with spaces
-            std::string newlines_removed = std::regex_replace(latex_removed, std::regex("\\n"), " ");
-            // remove punctuation
-            std::string punc_removed = std::regex_replace(newlines_removed, std::regex("[^\\w\\s]"), "");
-            // convert to lower case
-            std::transform(punc_removed.begin(), punc_removed.end(), punc_removed.begin(), [](unsigned char c) { return std::tolower(c); });
-            // TODO remove stop words?
-            summary_vector.push_back(punc_removed);
+            std::string raw_summary = entry.child("summary").child_value();
+            raw_summary_vector.push_back(raw_summary);
+            std::string sanitized_summary = sanitize_summary(raw_summary);
+            summary_vector.push_back(sanitized_summary);
 
             // populate auxiliary data
             title_vector.push_back(entry.child("title").child_value());
@@ -161,7 +62,21 @@ int main() {
         std::cout << title_vector.at(i) << std::endl;
         std::cout << "---------------" << std::endl;
         std::cout << raw_summary_vector.at(i) << std::endl << std::endl;
+
+        // guess based on training so far whether this might be interesting
+        if(dict.size() != 0) {
+            double ham_pos = compute_log_posterior(summary_vector.at(i), true);
+            double spam_pos = compute_log_posterior(summary_vector.at(i), false);
+            std::string guess;
+            if(ham_pos >= spam_pos)
+                guess = "interesting";
+            else
+                guess = "not interesting";
+            std::cout << "My guess is that you will find this " << guess << " (" << ham_pos << ", " << spam_pos << ")." << std::endl;
+        }
+
         std::cout << "Interesting or not? (y/n): ";
+
         std::string input;
         std::getline(std::cin, input);
         bool interesting = (tolower(input.front()) == 'y');
@@ -172,55 +87,12 @@ int main() {
             std::cout << std::endl << "Marked as INTERESTING." << std::endl;
             ham ++;
         }
-        // loop through each non-null word in the summary
-        int pos = 0;
-        // add a space at the end for convenience of how I parse
-        std::string s(summary_vector.at(i) + " ");
-        std::string token;
-        while((pos = s.find(' ')) != std::string::npos) {
-            token = s.substr(0, pos);
-            s.erase(0, pos + 1);
-            if(token != "") {
-                // check if already in dictionary
-                bool exists = false;
-                int existsAt = -1;
-                for(int j = 0; j < dict.size(); j++)
-                    if(dict.at(j).word == token) {
-                        exists = true;
-                        existsAt = j;
-                    }
-                if(exists) {
-                    if(interesting)
-                        dict.at(existsAt).ham_freq ++;
-                    else
-                        dict.at(existsAt).spam_freq ++;
-                } else {
-                    word w;
-                    w.word = token;
-                    if(interesting) {
-                        w.ham_freq = 1;
-                        w.spam_freq = 0;
-                    } else {
-                        w.ham_freq = 0;
-                        w.spam_freq = 1;
-                    }
-                    dict.push_back(w);
-                }
-            }
-        }
+
+        add_words_in_summary(summary_vector.at(i), interesting);
         std::cout << std::endl << std::endl << std::endl;
     }
 
-    // write the training data
-    std::cout << "Writing training data to file." << std::endl;
-    std::ofstream out_stream;
-    out_stream.open("training_data.txt");
-    out_stream << ham << '\n';
-    out_stream << spam << '\n';
-    for(word w : dict)
-        out_stream << (w.word + "/" + std::to_string(w.ham_freq) + "/" + std::to_string(w.spam_freq) + '\n');
-    out_stream.close();
-    std::cout << "Done." << std::endl;
+    write_training_data(TRAINING_FILE);
 
     return 0;
 }
